@@ -39,7 +39,7 @@ set(WSC_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   websocket-codec
   GIT_REPOSITORY https://github.com/JoakimJoensuu/websocket-codec.git
-  GIT_TAG 4eea5623edc2fce06062188aa6891ec1e7097ed2)
+  GIT_TAG 4ffcb3ec67dea1edeaeff87baaea3abe5eca58a2)
 FetchContent_MakeAvailable(websocket-codec)
 target_link_libraries(wsc PRIVATE wsm_sanitize)
 

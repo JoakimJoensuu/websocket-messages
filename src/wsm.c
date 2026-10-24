@@ -63,8 +63,8 @@ static enum open_state open_from_data_opcode(uint8_t opcode) {
 
 static bool is_deadly(enum wsc_status status) {
   switch (status) {
-  case WSC_ERR_LENGTH_NOT_MINIMAL:
-  case WSC_ERR_LENGTH64_MSB:
+  case WSC_ERR_PROTOCOL_LENGTH_NOT_MINIMAL:
+  case WSC_ERR_PROTOCOL_LENGTH64_MSB:
   case WSC_ERR_LENGTH_EXCEEDS_SIZE:
     return true;
   default:
@@ -80,9 +80,9 @@ static enum wsm_status map_status(enum wsc_status status) {
     return WSM_OK;
   case WSC_ERR_NO_MEMORY:
     return WSM_ERR_NO_MEMORY;
-  case WSC_ERR_LENGTH_NOT_MINIMAL:
+  case WSC_ERR_PROTOCOL_LENGTH_NOT_MINIMAL:
     return WSM_ERR_PROTOCOL_LENGTH_NOT_MINIMAL;
-  case WSC_ERR_LENGTH64_MSB:
+  case WSC_ERR_PROTOCOL_LENGTH64_MSB:
     return WSM_ERR_PROTOCOL_LENGTH64_MSB;
 #ifndef WSC_HOSTED
   case WSC_ERR_PAYLOAD_EXCEEDS_CAPACITY:
