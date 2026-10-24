@@ -317,6 +317,41 @@ Ensure(pong_and_close) {
   wsm_test_assert_message(&result.message, WSM_CLOSE, true, true, close_body, sizeof(close_body));
 }
 
+Ensure(payload_exceeds_capacity_while_fragmented) {
+  const uint8_t first[] = {'a'};
+  const uint8_t middle[] = {'b', 'b', 'b', 'b', 'b', 'b', 'b', 'b'};
+  const uint8_t last[] = {'c'};
+  struct wsm_encoder encoder = wsm_encoder_create();
+  uint8_t start[WIRE_CAPACITY];
+  uint8_t cont[WIRE_CAPACITY];
+  uint8_t end[WIRE_CAPACITY];
+  size_t start_length =
+      encode_into(sizeof(start), wsm_start_text(&encoder, start, first, sizeof(first), nullptr));
+  size_t middle_length =
+      encode_into(sizeof(cont), wsm_continue_text(&encoder, cont, middle, sizeof(middle), nullptr));
+  size_t end_length =
+      encode_into(sizeof(end), wsm_end_text(&encoder, end, last, sizeof(last), nullptr));
+  uint8_t small[sizeof(first)];
+  uint8_t large[sizeof(middle)];
+  struct wsm_decoder decoder;
+  struct wsm_decoding_result result;
+  size_t header_length = middle_length - sizeof(middle);
+  wsm_decoder_init(&decoder, small, sizeof(small));
+  result = wsm_decoder_feed(&decoder, start, start_length);
+  assert_that(result.status, is_equal_to(WSM_OK));
+  wsm_test_assert_message(&result.message, WSM_TEXT, true, false, first, sizeof(first));
+  result = wsm_decoder_feed(&decoder, cont, middle_length);
+  assert_that(result.status, is_equal_to(WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY));
+  assert_that(result.source_consumed, is_equal_to(header_length));
+  wsm_decoder_set_payload_buffer(&decoder, large, sizeof(large));
+  result = wsm_decoder_feed(&decoder, cont + header_length, middle_length - header_length);
+  assert_that(result.status, is_equal_to(WSM_OK));
+  wsm_test_assert_message(&result.message, WSM_TEXT, false, false, middle, sizeof(middle));
+  result = wsm_decoder_feed(&decoder, end, end_length);
+  assert_that(result.status, is_equal_to(WSM_OK));
+  wsm_test_assert_message(&result.message, WSM_TEXT, false, true, last, sizeof(last));
+}
+
 Ensure(encoded_length_matches_write) {
   const uint8_t hello[] = {'h', 'i'};
   struct wsm_encoder encoder = wsm_encoder_create();
@@ -345,6 +380,7 @@ int main() {
   add_test(suite, rfc_unmasked_hello);
   add_test(suite, fragmented_control);
   add_test(suite, pong_and_close);
+  add_test(suite, payload_exceeds_capacity_while_fragmented);
   add_test(suite, encoded_length_matches_write);
   auto reporter = create_text_reporter();
   int result = run_test_suite(suite, reporter);
