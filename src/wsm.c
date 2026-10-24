@@ -81,9 +81,9 @@ static enum wsm_status map_status(enum wsc_status status) {
   case WSC_ERR_NO_MEMORY:
     return WSM_ERR_NO_MEMORY;
   case WSC_ERR_LENGTH_NOT_MINIMAL:
-    return WSM_ERR_LENGTH_NOT_MINIMAL;
+    return WSM_ERR_PROTOCOL_LENGTH_NOT_MINIMAL;
   case WSC_ERR_LENGTH64_MSB:
-    return WSM_ERR_LENGTH64_MSB;
+    return WSM_ERR_PROTOCOL_LENGTH64_MSB;
 #ifndef WSC_HOSTED
   case WSC_ERR_PAYLOAD_EXCEEDS_CAPACITY:
     return WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY;
@@ -171,7 +171,7 @@ static enum wsm_status apply_frame(enum open_state *open, const struct wsc_frame
                                    struct wsm_message *message) {
   if (frame->opcode == WSC_OPCODE_CONTINUATION) {
     if (*open == OPEN_NONE) {
-      return WSM_ERR_ORPHAN_CONTINUATION;
+      return WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION;
     }
     *message = make_message(frame, type_from_opcode((uint8_t)*open), false, frame->fin);
     if (frame->fin) {
@@ -181,13 +181,13 @@ static enum wsm_status apply_frame(enum open_state *open, const struct wsc_frame
   }
   if (is_control_opcode(frame->opcode)) {
     if (!frame->fin) {
-      return WSM_ERR_FRAGMENTED_CONTROL;
+      return WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL;
     }
     *message = make_message(frame, type_from_opcode(frame->opcode), true, true);
     return WSM_OK;
   }
   if (*open != OPEN_NONE) {
-    return WSM_ERR_DATA_WHILE_FRAGMENTED;
+    return WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED;
   }
   *message = make_message(frame, type_from_opcode(frame->opcode), true, frame->fin);
   if (!frame->fin) {

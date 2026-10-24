@@ -182,11 +182,11 @@ Ensure(orphan_continuation) {
   struct wsm_decoding_result result;
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, cont, cont_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_ORPHAN_CONTINUATION));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION));
   assert_that(result.messages_count, is_equal_to(0));
   wsm_decoding_result_free(result);
   result = wsm_decoder_feed(decoder, cont, cont_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_ORPHAN_CONTINUATION));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION));
   assert_that(result.source_consumed, is_equal_to(0));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
@@ -211,7 +211,7 @@ Ensure(new_data_while_fragmented) {
   struct wsm_decoding_result result;
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
   assert_that(result.messages_count, is_equal_to(1));
   wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, first, sizeof(first));
   wsm_decoding_result_free(result);
@@ -238,7 +238,7 @@ Ensure(binary_while_text_open) {
   struct wsm_decoding_result result;
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
   assert_that(result.messages_count, is_equal_to(1));
   wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, text, sizeof(text));
   wsm_decoding_result_free(result);
@@ -265,7 +265,7 @@ Ensure(text_while_binary_open) {
   struct wsm_decoding_result result;
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
   assert_that(result.messages_count, is_equal_to(1));
   wsm_test_assert_message(&result.messages[0], WSM_BINARY, true, false, binary, sizeof(binary));
   wsm_decoding_result_free(result);
@@ -349,7 +349,7 @@ Ensure(fragmented_control) {
   struct wsm_decoding_result result;
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_FRAGMENTED_CONTROL));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL));
   assert_that(result.messages_count, is_equal_to(0));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);

@@ -6,18 +6,18 @@
 #include <stdint.h>
 
 enum wsm_status : int8_t {
-  WSM_INCOMPLETE             = 1,
-  WSM_OK                     = 0,
-  WSM_ERR_NO_MEMORY          = -1,
-  WSM_ERR_LENGTH_NOT_MINIMAL = -2,
-  WSM_ERR_LENGTH64_MSB       = -3,
+  WSM_INCOMPLETE                      = 1,
+  WSM_OK                              = 0,
+  WSM_ERR_NO_MEMORY                   = -1,
+  WSM_ERR_PROTOCOL_LENGTH_NOT_MINIMAL = -2,
+  WSM_ERR_PROTOCOL_LENGTH64_MSB       = -3,
 #ifndef WSM_HOSTED
   WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY = -4,
 #endif
-  WSM_ERR_LENGTH_EXCEEDS_SIZE   = -5,
-  WSM_ERR_ORPHAN_CONTINUATION   = -6,
-  WSM_ERR_DATA_WHILE_FRAGMENTED = -7,
-  WSM_ERR_FRAGMENTED_CONTROL    = -8,
+  WSM_ERR_LENGTH_EXCEEDS_SIZE            = -5,
+  WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION   = -6,
+  WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED = -7,
+  WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL    = -8,
 };
 
 enum wsm_message_type : uint8_t {

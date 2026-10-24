@@ -164,9 +164,9 @@ Ensure(orphan_continuation) {
       encode_into(sizeof(cont), wsm_continue_text(&encoder, cont, rest, sizeof(rest), nullptr));
   open_decoder(&opened);
   result = feed(&opened, cont, cont_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_ORPHAN_CONTINUATION));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION));
   result = feed(&opened, cont, cont_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_ORPHAN_CONTINUATION));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION));
   assert_that(result.source_consumed, is_equal_to(0));
 }
 
@@ -188,7 +188,7 @@ Ensure(new_data_while_fragmented) {
   assert_that(result.status, is_equal_to(WSM_OK));
   wsm_test_assert_message(&result.message, WSM_TEXT, true, false, first, sizeof(first));
   result = feed(&opened, other, next_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
 }
 
 Ensure(binary_while_text_open) {
@@ -209,7 +209,7 @@ Ensure(binary_while_text_open) {
   assert_that(result.status, is_equal_to(WSM_OK));
   wsm_test_assert_message(&result.message, WSM_TEXT, true, false, text, sizeof(text));
   result = feed(&opened, bin, binary_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
 }
 
 Ensure(text_while_binary_open) {
@@ -230,7 +230,7 @@ Ensure(text_while_binary_open) {
   assert_that(result.status, is_equal_to(WSM_OK));
   wsm_test_assert_message(&result.message, WSM_BINARY, true, false, binary, sizeof(binary));
   result = feed(&opened, msg, text_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_DATA_WHILE_FRAGMENTED));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
 }
 
 Ensure(split_across_chunks) {
@@ -294,7 +294,7 @@ Ensure(fragmented_control) {
   struct wsm_decoding_result result;
   open_decoder(&opened);
   result = feed(&opened, wire, wire_length);
-  assert_that(result.status, is_equal_to(WSM_ERR_FRAGMENTED_CONTROL));
+  assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL));
 }
 
 Ensure(pong_and_close) {
