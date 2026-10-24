@@ -284,7 +284,7 @@ static struct wsm_decoding_result take_codec_frames(struct wsm_decoder *decoder,
 
   if (0 < codec.frames_count) {
     if (SIZE_MAX / sizeof(*messages) < codec.frames_count) {
-      wsc_decoding_result_free(codec);
+      decoder->held = codec;
       return (struct wsm_decoding_result){
           .status = WSM_ERR_NO_MEMORY,
           .source_consumed = source_consumed,
