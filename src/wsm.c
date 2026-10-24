@@ -26,7 +26,7 @@ enum fragment : uint8_t {
 };
 
 struct data_plan {
-  enum wsm_type type;
+  enum wsm_message_type type;
   enum fragment fragment;
 };
 
@@ -49,8 +49,8 @@ static bool is_control_opcode(uint8_t opcode) {
   return (opcode & CONTROL_FRAME_BIT) != 0;
 }
 
-static enum wsm_type type_from_opcode(uint8_t opcode) {
-  enum wsm_type type = WSM_TEXT;
+static enum wsm_message_type type_from_opcode(uint8_t opcode) {
+  enum wsm_message_type type = WSM_TEXT;
   memcpy(&type, &opcode, sizeof(type));
   return type;
 }
@@ -150,7 +150,7 @@ static void commit_data(struct encoder *state, struct data_plan plan) {
   }
 }
 
-static struct wsm_message make_message(const struct wsc_frame *frame, enum wsm_type type,
+static struct wsm_message make_message(const struct wsc_frame *frame, enum wsm_message_type type,
                                        bool start, bool end) {
   struct wsm_message message = {
       .payload = frame->payload,
@@ -236,7 +236,7 @@ static struct wsm_encoding_result encode_data(struct wsm_encoder *encoder, struc
   return result;
 }
 
-static struct wsm_encoding_result encode_control(enum wsm_type type, const uint8_t *payload,
+static struct wsm_encoding_result encode_control(enum wsm_message_type type, const uint8_t *payload,
                                                  uint64_t payload_length,
                                                  const uint8_t *masking_key) {
   struct wsc_frame frame = make_frame((uint8_t)type, true, payload, payload_length, masking_key);
@@ -472,8 +472,9 @@ static size_t encode_data(struct wsm_encoder *encoder, uint8_t *destination, str
   return length;
 }
 
-static size_t encode_control(uint8_t *destination, enum wsm_type type, const uint8_t *payload,
-                             uint64_t payload_length, const uint8_t *masking_key) {
+static size_t encode_control(uint8_t *destination, enum wsm_message_type type,
+                             const uint8_t *payload, uint64_t payload_length,
+                             const uint8_t *masking_key) {
   if (destination == nullptr) {
     trap();
   }

@@ -20,7 +20,7 @@ enum wsm_status : int8_t {
   WSM_ERR_FRAGMENTED_CONTROL    = -8,
 };
 
-enum wsm_type : uint8_t {
+enum wsm_message_type : uint8_t {
   WSM_TEXT   = 0x1,
   WSM_BINARY = 0x2,
   WSM_CLOSE  = 0x8,
@@ -43,7 +43,7 @@ struct wsm_message {
   const uint8_t *payload;
   uint64_t payload_length;
   uint8_t masking_key[WSM_MASKING_KEY_LENGTH];
-  enum wsm_type type;
+  enum wsm_message_type type;
   bool start;
   bool end;
   bool rsv1;
@@ -70,7 +70,7 @@ struct wsm_decoding_result {
 };
 
 static constexpr size_t wsm_encoder_opaque_size =
-    sizeof(enum wsm_type) + (alignof(enum wsm_type) - 1);
+    sizeof(enum wsm_message_type) + (alignof(enum wsm_message_type) - 1);
 
 /**
  * Outbound fragmentation state. Contents are private.
@@ -79,7 +79,7 @@ static constexpr size_t wsm_encoder_opaque_size =
  * programming error.
  */
 struct wsm_encoder {
-  alignas(enum wsm_type) unsigned char opaque[wsm_encoder_opaque_size];
+  alignas(enum wsm_message_type) unsigned char opaque[wsm_encoder_opaque_size];
 };
 
 struct wsm_encoder wsm_encoder_create();
