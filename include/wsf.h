@@ -103,7 +103,9 @@ void wsf_decoder_destroy(struct wsf_decoder *decoder);
  * results.
  *
  * @c wsf_decoding_result.source_consumed is how many bytes of @p source were
- * accepted; re-feed the remainder after @c WSF_ERR_NO_MEMORY.
+ * accepted; re-feed the remainder after @c WSF_ERR_NO_MEMORY. A later feed may
+ * return the recovered events with @c wsf_decoding_result.source_consumed 0;
+ * re-feed that same remainder.
  *
  * @c WSF_ERR_NO_MEMORY does not kill the decoder. Length errors and sequencing
  * errors leave the decoder unusable until a new one is created. Events returned

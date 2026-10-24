@@ -188,6 +188,7 @@ struct wsf_encoder wsf_encoder_create() {
 
 struct wsf_decoder {
   struct wsc_decoder *codec;
+  struct wsc_decoding_result held;
   uint8_t open_opcode;
   bool dead;
   enum wsf_status last_status;
@@ -254,23 +255,14 @@ void wsf_decoder_destroy(struct wsf_decoder *decoder) {
   if (decoder == nullptr) {
     return;
   }
+  wsc_decoding_result_free(decoder->held);
   wsc_decoder_destroy(decoder->codec);
   free(decoder);
 }
 
-struct wsf_decoding_result wsf_decoder_feed(struct wsf_decoder *decoder, const uint8_t *source,
-                                            size_t source_length) {
-  if (decoder == nullptr) {
-    trap();
-  }
-  if (0 < source_length && source == nullptr) {
-    trap();
-  }
-  if (decoder->dead) {
-    return (struct wsf_decoding_result){.status = decoder->last_status};
-  }
-
-  struct wsc_decoding_result codec = wsc_decoder_feed(decoder->codec, source, source_length);
+static struct wsf_decoding_result take_codec_frames(struct wsf_decoder *decoder,
+                                                    struct wsc_decoding_result codec,
+                                                    size_t source_consumed) {
   struct wsf_event *events = nullptr;
   size_t events_count = 0;
 
@@ -279,15 +271,15 @@ struct wsf_decoding_result wsf_decoder_feed(struct wsf_decoder *decoder, const u
       wsc_decoding_result_free(codec);
       return (struct wsf_decoding_result){
           .status = WSF_ERR_NO_MEMORY,
-          .source_consumed = codec.source_consumed,
+          .source_consumed = source_consumed,
       };
     }
     events = malloc(codec.frames_count * sizeof(*events));
     if (events == nullptr) {
-      wsc_decoding_result_free(codec);
+      decoder->held = codec;
       return (struct wsf_decoding_result){
           .status = WSF_ERR_NO_MEMORY,
-          .source_consumed = codec.source_consumed,
+          .source_consumed = source_consumed,
       };
     }
     for (size_t i = 0; i < codec.frames_count; i++) {
@@ -305,7 +297,7 @@ struct wsf_decoding_result wsf_decoder_feed(struct wsf_decoder *decoder, const u
             .status = status,
             .events = events,
             .events_count = events_count,
-            .source_consumed = codec.source_consumed,
+            .source_consumed = source_consumed,
         };
       }
       events_count++;
@@ -322,8 +314,29 @@ struct wsf_decoding_result wsf_decoder_feed(struct wsf_decoder *decoder, const u
       .status = status,
       .events = events,
       .events_count = events_count,
-      .source_consumed = codec.source_consumed,
+      .source_consumed = source_consumed,
   };
+}
+
+struct wsf_decoding_result wsf_decoder_feed(struct wsf_decoder *decoder, const uint8_t *source,
+                                            size_t source_length) {
+  if (decoder == nullptr) {
+    trap();
+  }
+  if (0 < source_length && source == nullptr) {
+    trap();
+  }
+  if (decoder->dead) {
+    return (struct wsf_decoding_result){.status = decoder->last_status};
+  }
+  if (decoder->held.frames != nullptr) {
+    struct wsc_decoding_result held = decoder->held;
+    decoder->held = (struct wsc_decoding_result){};
+    return take_codec_frames(decoder, held, 0);
+  }
+
+  struct wsc_decoding_result codec = wsc_decoder_feed(decoder->codec, source, source_length);
+  return take_codec_frames(decoder, codec, codec.source_consumed);
 }
 
 void wsf_decoding_result_free(struct wsf_decoding_result result) {
