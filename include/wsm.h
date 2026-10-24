@@ -31,13 +31,12 @@ enum wsm_message_type : uint8_t {
 enum wsm_masking_key : unsigned { WSM_MASKING_KEY_LENGTH = 4 };
 
 /**
- * Inbound message. Data pieces of one message share @c wsm_message.type (TEXT
- * or BINARY). @c wsm_message.start is the first piece; @c wsm_message.end is
- * the last. A one-frame message has both. Control has both and is never
+ * Inbound message piece. Data pieces of one message share @c wsm_message.type
+ * (TEXT or BINARY). @c wsm_message.start is the first piece; @c wsm_message.end
+ * is the last. A one-frame message has both. Control has both and is never
  * fragmented.
  *
- * @c wsm_message.payload is @c wsm_message.payload_length bytes, not a C
- * string. TEXT is not NUL-terminated.
+ * @c wsm_message.payload is @c wsm_message.payload_length bytes.
  */
 struct wsm_message {
   const uint8_t *payload;
