@@ -43,7 +43,7 @@ Ensure(one_frame_message) {
   assert_that(result.status, is_equal_to(WSM_OK));
   assert_that(result.source_consumed, is_equal_to(wire_length));
   assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, true, hello, sizeof(hello));
+  wsm_test_assert_message(&result.messages[0], WSM_TEXT, hello, sizeof(hello));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -61,7 +61,7 @@ Ensure(one_frame_binary) {
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_OK));
   assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_BINARY, true, true, body, sizeof(body));
+  wsm_test_assert_message(&result.messages[0], WSM_BINARY, body, sizeof(body));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -70,6 +70,7 @@ Ensure(one_frame_binary) {
 Ensure(two_fragments) {
   const uint8_t first[] = {'H', 'e'};
   const uint8_t second[] = {'l', 'l', 'o'};
+  const uint8_t hello[] = {'H', 'e', 'l', 'l', 'o'};
   struct wsm_encoder encoder = wsm_encoder_create();
   size_t start_length = 0;
   size_t end_length = 0;
@@ -86,9 +87,8 @@ Ensure(two_fragments) {
   wsm_test_assert_frame_header(end, true, WSM_TEST_CONTINUATION);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_OK));
-  assert_that(result.messages_count, is_equal_to(2));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, first, sizeof(first));
-  wsm_test_assert_message(&result.messages[1], WSM_TEXT, false, true, second, sizeof(second));
+  assert_that(result.messages_count, is_equal_to(1));
+  wsm_test_assert_message(&result.messages[0], WSM_TEXT, hello, sizeof(hello));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -100,6 +100,7 @@ Ensure(three_fragments) {
   const uint8_t first[] = {'a'};
   const uint8_t middle[] = {'b', 'b'};
   const uint8_t last[] = {'c'};
+  const uint8_t body[] = {'a', 'b', 'b', 'c'};
   struct wsm_encoder encoder = wsm_encoder_create();
   size_t start_length = 0;
   size_t middle_length = 0;
@@ -120,10 +121,8 @@ Ensure(three_fragments) {
   wsm_test_assert_frame_header(cont, false, WSM_TEST_CONTINUATION);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_OK));
-  assert_that(result.messages_count, is_equal_to(3));
-  wsm_test_assert_message(&result.messages[0], WSM_BINARY, true, false, first, sizeof(first));
-  wsm_test_assert_message(&result.messages[1], WSM_BINARY, false, false, middle, sizeof(middle));
-  wsm_test_assert_message(&result.messages[2], WSM_BINARY, false, true, last, sizeof(last));
+  assert_that(result.messages_count, is_equal_to(1));
+  wsm_test_assert_message(&result.messages[0], WSM_BINARY, body, sizeof(body));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -137,6 +136,7 @@ Ensure(control_between_fragments) {
   const uint8_t first[] = {'H'};
   const uint8_t ping_body[] = {'?'};
   const uint8_t last[] = {'i'};
+  const uint8_t text[] = {'H', 'i'};
   struct wsm_encoder encoder = wsm_encoder_create();
   size_t start_length = 0;
   size_t ping_length = 0;
@@ -155,10 +155,9 @@ Ensure(control_between_fragments) {
   wsm_test_assert_frame_header(ping, true, WSM_PING);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_OK));
-  assert_that(result.messages_count, is_equal_to(3));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, first, sizeof(first));
-  wsm_test_assert_message(&result.messages[1], WSM_PING, true, true, ping_body, sizeof(ping_body));
-  wsm_test_assert_message(&result.messages[2], WSM_TEXT, false, true, last, sizeof(last));
+  assert_that(result.messages_count, is_equal_to(2));
+  wsm_test_assert_message(&result.messages[0], WSM_PING, ping_body, sizeof(ping_body));
+  wsm_test_assert_message(&result.messages[1], WSM_TEXT, text, sizeof(text));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -212,8 +211,7 @@ Ensure(new_data_while_fragmented) {
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
-  assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, first, sizeof(first));
+  assert_that(result.messages_count, is_equal_to(0));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -239,8 +237,7 @@ Ensure(binary_while_text_open) {
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
-  assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, false, text, sizeof(text));
+  assert_that(result.messages_count, is_equal_to(0));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -266,8 +263,7 @@ Ensure(text_while_binary_open) {
   assert_that(decoder, is_non_null);
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED));
-  assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_BINARY, true, false, binary, sizeof(binary));
+  assert_that(result.messages_count, is_equal_to(0));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -296,7 +292,7 @@ Ensure(split_across_chunks) {
   result = wsm_decoder_feed(decoder, wire + 1, wire_length - 1);
   assert_that(result.status, is_equal_to(WSM_OK));
   assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, true, hello, sizeof(hello));
+  wsm_test_assert_message(&result.messages[0], WSM_TEXT, hello, sizeof(hello));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);
@@ -319,7 +315,7 @@ Ensure(byte_at_a_time) {
       wsm_decoding_result_free(result);
     } else {
       assert_that(result.messages_count, is_equal_to(1));
-      wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, true, hello, sizeof(hello));
+      wsm_test_assert_message(&result.messages[0], WSM_TEXT, hello, sizeof(hello));
       assert_that(result.messages[0].masked, is_true);
       wsm_decoding_result_free(result);
     }
@@ -337,7 +333,7 @@ Ensure(rfc_unmasked_hello) {
   result = wsm_decoder_feed(decoder, wire, sizeof(wire));
   assert_that(result.status, is_equal_to(WSM_OK));
   assert_that(result.messages_count, is_equal_to(1));
-  wsm_test_assert_message(&result.messages[0], WSM_TEXT, true, true, hello, sizeof(hello));
+  wsm_test_assert_message(&result.messages[0], WSM_TEXT, hello, sizeof(hello));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
 }
@@ -371,9 +367,8 @@ Ensure(pong_and_close) {
   result = wsm_decoder_feed(decoder, wire, wire_length);
   assert_that(result.status, is_equal_to(WSM_OK));
   assert_that(result.messages_count, is_equal_to(2));
-  wsm_test_assert_message(&result.messages[0], WSM_PONG, true, true, pong_body, sizeof(pong_body));
-  wsm_test_assert_message(&result.messages[1], WSM_CLOSE, true, true, close_body,
-                          sizeof(close_body));
+  wsm_test_assert_message(&result.messages[0], WSM_PONG, pong_body, sizeof(pong_body));
+  wsm_test_assert_message(&result.messages[1], WSM_CLOSE, close_body, sizeof(close_body));
   wsm_decoding_result_free(result);
   wsm_decoder_destroy(decoder);
   free(wire);

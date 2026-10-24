@@ -31,10 +31,10 @@ enum wsm_message_type : uint8_t {
 enum wsm_masking_key : unsigned { WSM_MASKING_KEY_LENGTH = 4 };
 
 /**
- * Inbound message piece. Data pieces of one message share @c wsm_message.type
- * (TEXT or BINARY). @c wsm_message.start is the first piece; @c wsm_message.end
- * is the last. A one-frame message has both. Control has both and is never
- * fragmented.
+ * Inbound message. TEXT or BINARY is one payload: the first frame through the
+ * FIN frame. Ping, Pong, and Close are their own messages and may be emitted
+ * while a data message is still open. Their payloads stay out of the data
+ * payload.
  *
  * @c wsm_message.payload is @c wsm_message.payload_length bytes.
  */
@@ -43,8 +43,6 @@ struct wsm_message {
   uint64_t payload_length;
   uint8_t masking_key[WSM_MASKING_KEY_LENGTH];
   enum wsm_message_type type;
-  bool start;
-  bool end;
   bool rsv1;
   bool rsv2;
   bool rsv3;
@@ -98,7 +96,8 @@ void wsm_decoder_destroy(struct wsm_decoder *decoder);
 /**
  * Parse @p source into messages. Incomplete frames stay in the decoder.
  *
- * Control messages are emitted as themselves, including between data pieces.
+ * A data message is emitted when its FIN frame arrives. Control is emitted as
+ * it arrives.
  *
  * The caller owns @c wsm_decoding_result.messages and each message's payload;
  * free them with wsm_decoding_result_free. A later feed does not invalidate
@@ -192,13 +191,17 @@ void wsm_decoder_set_payload_buffer(struct wsm_decoder *decoder, uint8_t *payloa
  * Parse @p source into at most one message. Incomplete frames stay in the
  * decoder.
  *
- * Payload bytes are written into the buffer installed on @p decoder.
+ * Payload bytes are written into the buffer installed on @p decoder. A data
+ * message occupies the start of that buffer until its FIN frame; control uses
+ * the free suffix and is overwritten by the next feed.
  * @c WSM_OK means @c wsm_decoding_result.message is complete. Its payload
- * addresses that buffer. @c WSM_INCOMPLETE means more source is required.
+ * addresses that buffer. @c WSM_INCOMPLETE means no message yet: the frame is
+ * unfinished, or a data message is still open.
  * @c wsm_decoding_result.source_consumed is how many bytes of @p source were
  * accepted. Re-feed the unconsumed suffix.
  * On @c WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY the payload was not accepted. Pass a
- * larger buffer to wsm_decoder_set_payload_buffer and re-feed the suffix.
+ * larger buffer to wsm_decoder_set_payload_buffer and re-feed the suffix. The
+ * bytes of an open data message are copied into that buffer.
  * Length errors and sequencing errors leave the decoder unusable until
  * wsm_decoder_init.
  */

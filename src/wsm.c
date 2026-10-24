@@ -150,50 +150,26 @@ static void commit_data(struct encoder *state, struct data_plan plan) {
   }
 }
 
-static struct wsm_message make_message(const struct wsc_frame *frame, enum wsm_message_type type,
-                                       bool start, bool end) {
+static struct wsm_message make_message(const uint8_t *payload, uint64_t payload_length,
+                                       const uint8_t *masking_key, enum wsm_message_type type,
+                                       bool rsv1, bool rsv2, bool rsv3, bool masked) {
   struct wsm_message message = {
-      .payload = frame->payload,
-      .payload_length = frame->payload_length,
+      .payload = payload,
+      .payload_length = payload_length,
       .type = type,
-      .start = start,
-      .end = end,
-      .rsv1 = frame->rsv1,
-      .rsv2 = frame->rsv2,
-      .rsv3 = frame->rsv3,
-      .masked = frame->masked,
+      .rsv1 = rsv1,
+      .rsv2 = rsv2,
+      .rsv3 = rsv3,
+      .masked = masked,
   };
-  memcpy(message.masking_key, frame->masking_key, WSM_MASKING_KEY_LENGTH);
+  memcpy(message.masking_key, masking_key, WSM_MASKING_KEY_LENGTH);
   return message;
 }
 
-static enum wsm_status apply_frame(enum open_state *open, const struct wsc_frame *frame,
-                                   struct wsm_message *message) {
-  if (frame->opcode == WSC_OPCODE_CONTINUATION) {
-    if (*open == OPEN_NONE) {
-      return WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION;
-    }
-    *message = make_message(frame, type_from_opcode((uint8_t)*open), false, frame->fin);
-    if (frame->fin) {
-      *open = OPEN_NONE;
-    }
-    return WSM_OK;
-  }
-  if (is_control_opcode(frame->opcode)) {
-    if (!frame->fin) {
-      return WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL;
-    }
-    *message = make_message(frame, type_from_opcode(frame->opcode), true, true);
-    return WSM_OK;
-  }
-  if (*open != OPEN_NONE) {
-    return WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED;
-  }
-  *message = make_message(frame, type_from_opcode(frame->opcode), true, frame->fin);
-  if (!frame->fin) {
-    *open = open_from_data_opcode(frame->opcode);
-  }
-  return WSM_OK;
+static struct wsm_message message_from_frame(const struct wsc_frame *frame,
+                                             enum wsm_message_type type) {
+  return make_message(frame->payload, frame->payload_length, frame->masking_key, type, frame->rsv1,
+                      frame->rsv2, frame->rsv3, frame->masked);
 }
 
 struct wsm_encoder wsm_encoder_create() {
@@ -205,7 +181,14 @@ struct wsm_encoder wsm_encoder_create() {
 struct wsm_decoder {
   struct wsc_decoder *codec;
   struct wsc_decoding_result held;
+  uint8_t *data;
+  size_t data_length;
+  uint8_t data_masking_key[WSM_MASKING_KEY_LENGTH];
   enum open_state open;
+  bool data_rsv1;
+  bool data_rsv2;
+  bool data_rsv3;
+  bool data_masked;
   bool dead;
   enum wsm_status last_status;
 };
@@ -243,14 +226,110 @@ static struct wsm_encoding_result encode_control(enum wsm_message_type type, con
   return encoding_from_codec(wsc_encode(&frame));
 }
 
-static void release_codec_frames(struct wsc_decoding_result codec, size_t taken_count) {
+static void release_codec_frames(struct wsc_decoding_result codec) {
   if (codec.frames == nullptr) {
     return;
   }
-  for (size_t i = taken_count; i < codec.frames_count; i++) {
+  for (size_t i = 0; i < codec.frames_count; i++) {
     free((void *)codec.frames[i].payload);
   }
   free((void *)codec.frames);
+}
+
+static void hold_codec_frames(struct wsm_decoder *decoder, struct wsc_frame *frames, size_t index,
+                              size_t count) {
+  if (0 < index) {
+    memmove(frames, frames + index, (count - index) * sizeof(*frames));
+  }
+  decoder->held = (struct wsc_decoding_result){
+      .frames = frames,
+      .frames_count = count - index,
+  };
+}
+
+static void remember_data(struct wsm_decoder *decoder, const struct wsc_frame *frame) {
+  decoder->open = open_from_data_opcode(frame->opcode);
+  decoder->data_masked = frame->masked;
+  decoder->data_rsv1 = frame->rsv1;
+  decoder->data_rsv2 = frame->rsv2;
+  decoder->data_rsv3 = frame->rsv3;
+  memcpy(decoder->data_masking_key, frame->masking_key, WSM_MASKING_KEY_LENGTH);
+}
+
+static void take_payload(struct wsc_frame *frame, uint8_t **data, size_t *data_length) {
+  *data = (uint8_t *)frame->payload;
+  *data_length = (size_t)frame->payload_length;
+  frame->payload = nullptr;
+}
+
+static enum wsm_status append_data(struct wsm_decoder *decoder, struct wsc_frame *frame) {
+  if (SIZE_MAX - decoder->data_length < frame->payload_length) {
+    return WSM_ERR_LENGTH_EXCEEDS_SIZE;
+  }
+  size_t extra = (size_t)frame->payload_length;
+  if (extra == 0) {
+    return WSM_OK;
+  }
+  size_t total = decoder->data_length + extra;
+  uint8_t *grown = realloc(decoder->data, total);
+  if (grown == nullptr) {
+    return WSM_ERR_NO_MEMORY;
+  }
+  memcpy(grown + decoder->data_length, frame->payload, extra);
+  free((void *)frame->payload);
+  frame->payload = nullptr;
+  decoder->data = grown;
+  decoder->data_length = total;
+  return WSM_OK;
+}
+
+static struct wsm_message finish_data(struct wsm_decoder *decoder) {
+  struct wsm_message message =
+      make_message(decoder->data, decoder->data_length, decoder->data_masking_key,
+                   type_from_opcode((uint8_t)decoder->open), decoder->data_rsv1, decoder->data_rsv2,
+                   decoder->data_rsv3, decoder->data_masked);
+  decoder->data = nullptr;
+  decoder->data_length = 0;
+  decoder->open = OPEN_NONE;
+  return message;
+}
+
+static enum wsm_status accept_frame(struct wsm_decoder *decoder, struct wsc_frame *frame,
+                                    struct wsm_message *message, bool *emit) {
+  *emit = false;
+  if (frame->opcode == WSC_OPCODE_CONTINUATION) {
+    if (decoder->open == OPEN_NONE) {
+      return WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION;
+    }
+    enum wsm_status status = append_data(decoder, frame);
+    if (status != WSM_OK) {
+      return status;
+    }
+    if (frame->fin) {
+      *message = finish_data(decoder);
+      *emit = true;
+    }
+    return WSM_OK;
+  }
+  if (is_control_opcode(frame->opcode)) {
+    if (!frame->fin) {
+      return WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL;
+    }
+    *message = message_from_frame(frame, type_from_opcode(frame->opcode));
+    frame->payload = nullptr;
+    *emit = true;
+    return WSM_OK;
+  }
+  if (decoder->open != OPEN_NONE) {
+    return WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED;
+  }
+  remember_data(decoder, frame);
+  take_payload(frame, &decoder->data, &decoder->data_length);
+  if (frame->fin) {
+    *message = finish_data(decoder);
+    *emit = true;
+  }
+  return WSM_OK;
 }
 
 struct wsm_decoder *wsm_decoder_create() {
@@ -271,9 +350,18 @@ void wsm_decoder_destroy(struct wsm_decoder *decoder) {
   if (decoder == nullptr) {
     return;
   }
+  free(decoder->data);
   wsc_decoding_result_free(decoder->held);
   wsc_decoder_destroy(decoder->codec);
   free(decoder);
+}
+
+static struct wsm_message *issued_messages(struct wsm_message *messages, size_t messages_count) {
+  if (messages_count == 0) {
+    free(messages);
+    return nullptr;
+  }
+  return messages;
 }
 
 static struct wsm_decoding_result take_codec_frames(struct wsm_decoder *decoder,
@@ -282,6 +370,7 @@ static struct wsm_decoding_result take_codec_frames(struct wsm_decoder *decoder,
   struct wsm_message *messages = nullptr;
   size_t messages_count = 0;
 
+  struct wsc_frame *frames = (struct wsc_frame *)codec.frames;
   if (0 < codec.frames_count) {
     if (SIZE_MAX / sizeof(*messages) < codec.frames_count) {
       decoder->held = codec;
@@ -299,26 +388,34 @@ static struct wsm_decoding_result take_codec_frames(struct wsm_decoder *decoder,
       };
     }
     for (size_t i = 0; i < codec.frames_count; i++) {
-      enum wsm_status status =
-          apply_frame(&decoder->open, &codec.frames[i], &messages[messages_count]);
-      if (status != WSM_OK) {
-        release_codec_frames(codec, messages_count);
-        decoder->dead = true;
-        decoder->last_status = status;
-        if (messages_count == 0) {
-          free(messages);
-          messages = nullptr;
-        }
+      bool emit = false;
+      enum wsm_status status = accept_frame(decoder, &frames[i], &messages[messages_count], &emit);
+      if (status == WSM_ERR_NO_MEMORY) {
+        hold_codec_frames(decoder, frames, i, codec.frames_count);
         return (struct wsm_decoding_result){
             .status = status,
-            .messages = messages,
+            .messages = issued_messages(messages, messages_count),
             .messages_count = messages_count,
             .source_consumed = source_consumed,
         };
       }
-      messages_count++;
+      if (status != WSM_OK) {
+        release_codec_frames(codec);
+        decoder->dead = true;
+        decoder->last_status = status;
+        return (struct wsm_decoding_result){
+            .status = status,
+            .messages = issued_messages(messages, messages_count),
+            .messages_count = messages_count,
+            .source_consumed = source_consumed,
+        };
+      }
+      if (emit) {
+        messages_count++;
+      }
     }
-    release_codec_frames(codec, messages_count);
+    release_codec_frames(codec);
+    messages = issued_messages(messages, messages_count);
   }
 
   enum wsm_status status = map_status(codec.status);
@@ -433,7 +530,16 @@ struct wsm_encoding_result wsm_close(const uint8_t *payload, uint64_t payload_le
 
 struct decoder {
   struct wsc_decoder codec;
+  uint8_t *payload;
+  size_t payload_capacity;
+  size_t filled;
+  uint8_t masking_key[WSM_MASKING_KEY_LENGTH];
   enum open_state open;
+  bool frame_open;
+  bool rsv1;
+  bool rsv2;
+  bool rsv3;
+  bool masked;
   bool dead;
   enum wsm_status last_status;
 };
@@ -482,11 +588,18 @@ static size_t encode_control(uint8_t *destination, enum wsm_message_type type,
   return wsc_encode(destination, &frame);
 }
 
+static void point_codec_at_suffix(struct decoder *state) {
+  uint8_t *suffix = state->filled == 0 ? state->payload : state->payload + state->filled;
+  wsc_decoder_set_payload_buffer(&state->codec, suffix, state->payload_capacity - state->filled);
+}
+
 void wsm_decoder_init(struct wsm_decoder *decoder, uint8_t *payload, size_t payload_capacity) {
   if (decoder == nullptr) {
     trap();
   }
   struct decoder state = {0};
+  state.payload = payload;
+  state.payload_capacity = payload_capacity;
   wsc_decoder_init(&state.codec, payload, payload_capacity);
   *decoder = opaque_decoder(&state);
 }
@@ -497,7 +610,17 @@ void wsm_decoder_set_payload_buffer(struct wsm_decoder *decoder, uint8_t *payloa
     trap();
   }
   struct decoder state = transparent_decoder(decoder);
-  wsc_decoder_set_payload_buffer(&state.codec, payload, payload_capacity);
+  if (payload_capacity < state.filled) {
+    trap();
+  }
+  if (payload != state.payload && 0 < state.filled) {
+    memcpy(payload, state.payload, state.filled);
+  }
+  state.payload = payload;
+  state.payload_capacity = payload_capacity;
+  if (!state.frame_open) {
+    point_codec_at_suffix(&state);
+  }
   *decoder = opaque_decoder(&state);
 }
 
@@ -513,10 +636,14 @@ struct wsm_decoding_result wsm_decoder_feed(struct wsm_decoder *decoder, const u
   if (state.dead) {
     return (struct wsm_decoding_result){.status = state.last_status};
   }
+  if (!state.frame_open) {
+    point_codec_at_suffix(&state);
+  }
 
   struct wsc_decoding_result codec = wsc_decoder_feed(&state.codec, source, source_length);
   if (codec.status != WSC_OK) {
     enum wsm_status status = map_status(codec.status);
+    state.frame_open = codec.status == WSC_INCOMPLETE;
     if (is_deadly(codec.status)) {
       state.dead = true;
       state.last_status = status;
@@ -527,18 +654,75 @@ struct wsm_decoding_result wsm_decoder_feed(struct wsm_decoder *decoder, const u
         .source_consumed = codec.source_consumed,
     };
   }
+  state.frame_open = false;
 
-  struct wsm_message message;
-  enum wsm_status status = apply_frame(&state.open, &codec.frame, &message);
-  if (status != WSM_OK) {
-    state.dead = true;
-    state.last_status = status;
+  struct wsc_frame frame = codec.frame;
+  if (frame.opcode == WSC_OPCODE_CONTINUATION) {
+    if (state.open == OPEN_NONE) {
+      state.dead = true;
+      state.last_status = WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION;
+      *decoder = opaque_decoder(&state);
+      return (struct wsm_decoding_result){
+          .status = WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION,
+          .source_consumed = codec.source_consumed,
+      };
+    }
+  } else if (is_control_opcode(frame.opcode)) {
+    if (!frame.fin) {
+      state.dead = true;
+      state.last_status = WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL;
+      *decoder = opaque_decoder(&state);
+      return (struct wsm_decoding_result){
+          .status = WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL,
+          .source_consumed = codec.source_consumed,
+      };
+    }
     *decoder = opaque_decoder(&state);
     return (struct wsm_decoding_result){
-        .status = status,
+        .status = WSM_OK,
+        .message = message_from_frame(&frame, type_from_opcode(frame.opcode)),
+        .source_consumed = codec.source_consumed,
+    };
+  } else if (state.open != OPEN_NONE) {
+    state.dead = true;
+    state.last_status = WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED;
+    *decoder = opaque_decoder(&state);
+    return (struct wsm_decoding_result){
+        .status = WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED,
+        .source_consumed = codec.source_consumed,
+    };
+  } else {
+    state.open = open_from_data_opcode(frame.opcode);
+    state.masked = frame.masked;
+    state.rsv1 = frame.rsv1;
+    state.rsv2 = frame.rsv2;
+    state.rsv3 = frame.rsv3;
+    memcpy(state.masking_key, frame.masking_key, WSM_MASKING_KEY_LENGTH);
+  }
+
+  if (SIZE_MAX - state.filled < frame.payload_length) {
+    state.dead = true;
+    state.last_status = WSM_ERR_LENGTH_EXCEEDS_SIZE;
+    *decoder = opaque_decoder(&state);
+    return (struct wsm_decoding_result){
+        .status = WSM_ERR_LENGTH_EXCEEDS_SIZE,
         .source_consumed = codec.source_consumed,
     };
   }
+  state.filled += (size_t)frame.payload_length;
+  if (!frame.fin) {
+    *decoder = opaque_decoder(&state);
+    return (struct wsm_decoding_result){
+        .status = WSM_INCOMPLETE,
+        .source_consumed = codec.source_consumed,
+    };
+  }
+
+  struct wsm_message message = make_message(state.payload, state.filled, state.masking_key,
+                                            type_from_opcode((uint8_t)state.open), state.rsv1,
+                                            state.rsv2, state.rsv3, state.masked);
+  state.filled = 0;
+  state.open = OPEN_NONE;
   *decoder = opaque_decoder(&state);
   return (struct wsm_decoding_result){
       .status = WSM_OK,

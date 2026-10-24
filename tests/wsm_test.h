@@ -10,11 +10,9 @@ enum : uint8_t {
 };
 
 static inline void wsm_test_assert_message(const struct wsm_message *actual,
-                                           enum wsm_message_type type, bool start, bool end,
-                                           const uint8_t *payload, size_t payload_length) {
+                                           enum wsm_message_type type, const uint8_t *payload,
+                                           size_t payload_length) {
   assert_that(actual->type, is_equal_to(type));
-  assert_that(actual->start, is_equal_to(start));
-  assert_that(actual->end, is_equal_to(end));
   assert_that(actual->payload_length, is_equal_to(payload_length));
   if (0 < payload_length) {
     assert_that(actual->payload, is_non_null);

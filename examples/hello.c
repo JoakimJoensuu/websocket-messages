@@ -17,8 +17,7 @@ int main() {
     return 1;
   }
   struct wsm_decoding_result result = wsm_decoder_feed(decoder, encoded.data, encoded.data_length);
-  if (result.status != WSM_OK || result.messages_count != 1 || !result.messages[0].start ||
-      !result.messages[0].end) {
+  if (result.status != WSM_OK || result.messages_count != 1) {
     wsm_decoding_result_free(result);
     free(encoded.data);
     wsm_decoder_destroy(decoder);
