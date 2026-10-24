@@ -1,22 +1,22 @@
-# WebSocket framer
+# WebSocket messages
 
-Messages ↔ frames (RFC 6455 §5.4), including the byte stream. The codec is an
-internal dependency; do not call it. API in [include/wsf.h](include/wsf.h).
+RFC 6455 §5.4 messages, including the byte stream. The codec is an internal
+dependency; do not call it. API in [include/wsm.h](include/wsm.h).
 
 No UTF-8, close handshake, RSV or opcode policy, auto-pong, HTTP, or sockets.
 
 ## Build
 
-Hosted (`-DWSF_HOSTED=ON` required on every configure; the cache keeps the last value otherwise):
+Hosted (`-DWSM_HOSTED=ON` required on every configure; the cache keeps the last value otherwise):
 
 ```sh
-cmake -B build -DWSF_HOSTED=ON && cmake --build build && ctest --test-dir build
+cmake -B build -DWSM_HOSTED=ON && cmake --build build && ctest --test-dir build
 ```
 
 Freestanding:
 
 ```sh
-cmake -B build -DWSF_HOSTED=OFF && cmake --build build && ctest --test-dir build
+cmake -B build -DWSM_HOSTED=OFF && cmake --build build && ctest --test-dir build
 ```
 
 See [CMakeLists.txt](CMakeLists.txt) and [tests/CMakeLists.txt](tests/CMakeLists.txt) for

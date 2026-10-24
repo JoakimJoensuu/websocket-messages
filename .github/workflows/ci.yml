@@ -48,7 +48,7 @@ jobs:
           key: clang-23.1.0-${{ runner.os }}-tidy-format-v3
       - run: |
           cmake -B build-hosted
-          cmake -B build-freestanding -DWSF_HOSTED=OFF
+          cmake -B build-freestanding -DWSM_HOSTED=OFF
       - run: |
           export PATH="${{ runner.temp }}/clang/bin:$PATH"
           export LD_LIBRARY_PATH="${{ runner.temp }}/clang/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -71,11 +71,11 @@ jobs:
           fi
           if [ -n "$units" ]; then
             clang-tidy --experimental-custom-checks -p build-hosted \
-              $(jq -r '.[].file' build-hosted/compile_commands.json | grep -E 'websocket-framer/(src|include|tests|examples)/' | sort -u) \
+              $(jq -r '.[].file' build-hosted/compile_commands.json | grep -E '(websocket-framer|websocket-messages)/(src|include|tests|examples)/' | sort -u) \
               | tee "$RUNNER_TEMP/tidy-hosted.log"
             tidy_hosted=${PIPESTATUS[0]}
             clang-tidy --experimental-custom-checks -p build-freestanding \
-              $(jq -r '.[].file' build-freestanding/compile_commands.json | grep -E 'websocket-framer/(src|include|tests|examples)/' | sort -u) \
+              $(jq -r '.[].file' build-freestanding/compile_commands.json | grep -E '(websocket-framer|websocket-messages)/(src|include|tests|examples)/' | sort -u) \
               | tee "$RUNNER_TEMP/tidy-freestanding.log"
             tidy_freestanding=${PIPESTATUS[0]}
             tidy=0
@@ -103,6 +103,6 @@ jobs:
         hosted: [ON, OFF]
     steps:
       - uses: actions/checkout@v5
-      - run: cmake -B build -DWSF_HOSTED=${{ matrix.hosted }}
+      - run: cmake -B build -DWSM_HOSTED=${{ matrix.hosted }}
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure

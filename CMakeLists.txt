@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(websocket-framer LANGUAGES C)
+project(websocket-messages LANGUAGES C)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -12,9 +12,9 @@ if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
        "${CMAKE_SOURCE_DIR}/compile_commands.json" SYMBOLIC COPY_ON_ERROR)
 endif()
 
-add_library(wsf_warnings INTERFACE)
+add_library(wsm_warnings INTERFACE)
 target_compile_options(
-  wsf_warnings
+  wsm_warnings
   INTERFACE -Wall
             -Wextra
             -Wpedantic
@@ -24,16 +24,16 @@ target_compile_options(
             -Wmissing-prototypes
             -Wshadow
             -Wstrict-prototypes)
-add_library(wsf_sanitize INTERFACE)
+add_library(wsm_sanitize INTERFACE)
 if(PROJECT_IS_TOP_LEVEL AND (CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "GNU"))
-  target_compile_options(wsf_sanitize INTERFACE -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
-  target_link_options(wsf_sanitize INTERFACE -fsanitize=address,undefined)
+  target_compile_options(wsm_sanitize INTERFACE -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+  target_link_options(wsm_sanitize INTERFACE -fsanitize=address,undefined)
 endif()
 
-option(WSF_HOSTED "Heap-backed decoder and encode" ON)
+option(WSM_HOSTED "Heap-backed decoder and encode" ON)
 
 include(FetchContent)
-set(WSC_HOSTED ${WSF_HOSTED} CACHE BOOL "Heap-backed decoder and wsc_encode" FORCE)
+set(WSC_HOSTED ${WSM_HOSTED} CACHE BOOL "Heap-backed decoder and wsc_encode" FORCE)
 set(WSC_TESTS OFF CACHE BOOL "" FORCE)
 set(WSC_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
@@ -41,27 +41,27 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/JoakimJoensuu/websocket-codec.git
   GIT_TAG 4eea5623edc2fce06062188aa6891ec1e7097ed2)
 FetchContent_MakeAvailable(websocket-codec)
-target_link_libraries(wsc PRIVATE wsf_sanitize)
+target_link_libraries(wsc PRIVATE wsm_sanitize)
 
-add_library(wsf src/wsf.c)
-if(WSF_HOSTED)
-  target_compile_definitions(wsf PUBLIC WSF_HOSTED=1)
+add_library(wsm src/wsm.c)
+if(WSM_HOSTED)
+  target_compile_definitions(wsm PUBLIC WSM_HOSTED=1)
 else()
-  target_compile_options(wsf PRIVATE -ffreestanding)
+  target_compile_options(wsm PRIVATE -ffreestanding)
 endif()
 
-target_include_directories(wsf PUBLIC include)
-target_compile_features(wsf PUBLIC c_std_23)
-target_link_libraries(wsf PRIVATE wsc wsf_warnings wsf_sanitize)
+target_include_directories(wsm PUBLIC include)
+target_compile_features(wsm PUBLIC c_std_23)
+target_link_libraries(wsm PRIVATE wsc wsm_warnings wsm_sanitize)
 
-option(WSF_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
-option(WSF_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
+option(WSM_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
+option(WSM_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 
-if(WSF_EXAMPLES AND WSF_HOSTED)
+if(WSM_EXAMPLES AND WSM_HOSTED)
   add_subdirectory(examples)
 endif()
 
-if(WSF_TESTS)
+if(WSM_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
