@@ -1,0 +1,326 @@
+#ifndef WSM_H
+#define WSM_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum wsm_status : int8_t {
+  WSM_INCOMPLETE                      = 1,
+  WSM_OK                              = 0,
+  WSM_ERR_NO_MEMORY                   = -1,
+  WSM_ERR_PROTOCOL_LENGTH_NOT_MINIMAL = -2,
+  WSM_ERR_PROTOCOL_LENGTH64_MSB       = -3,
+#ifndef WSM_HOSTED
+  WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY = -4,
+#endif
+  WSM_ERR_LENGTH_EXCEEDS_SIZE            = -5,
+  WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION   = -6,
+  WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED = -7,
+  WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL    = -8,
+  WSM_ERR_MAX_FRAME_LENGTH               = -9,
+};
+
+enum wsm_message_type : uint8_t {
+  WSM_TEXT   = 0x1,
+  WSM_BINARY = 0x2,
+  WSM_CLOSE  = 0x8,
+  WSM_PING   = 0x9,
+  WSM_PONG   = 0xA,
+};
+
+enum wsm_masking_key : unsigned { WSM_MASKING_KEY_LENGTH = 4 };
+
+/**
+ * Inbound message. TEXT or BINARY is one payload: the first frame through the
+ * FIN frame. Ping, Pong, and Close are their own messages and may be emitted
+ * while a data message is still open. Their payloads stay out of the data
+ * payload.
+ *
+ * @c wsm_message.payload is @c wsm_message.payload_length bytes.
+ */
+struct wsm_message {
+  const uint8_t *payload;
+  uint64_t payload_length;
+  uint8_t masking_key[WSM_MASKING_KEY_LENGTH];
+  enum wsm_message_type type;
+  bool rsv1;
+  bool rsv2;
+  bool rsv3;
+  bool masked;
+};
+
+struct wsm_encoding_result {
+  enum wsm_status status;
+  uint8_t *data;
+  size_t data_length;
+};
+
+struct wsm_decoding_result {
+  enum wsm_status status;
+#ifdef WSM_HOSTED
+  const struct wsm_message *messages;
+  size_t messages_count;
+#elifndef WSM_HOSTED
+  struct wsm_message message;
+#endif
+  size_t source_consumed;
+};
+
+static constexpr size_t wsm_encoder_opaque_size =
+    sizeof(enum wsm_message_type) + (alignof(enum wsm_message_type) - 1);
+
+/**
+ * Outbound fragmentation state. Contents are private.
+ *
+ * Mixing TEXT continue/end with an open BINARY message (and the reverse) is a
+ * programming error.
+ */
+struct wsm_encoder {
+  alignas(enum wsm_message_type) unsigned char opaque[wsm_encoder_opaque_size];
+};
+
+struct wsm_encoder wsm_encoder_create();
+
+/**
+ * Split of @p payload_length into frames of at most @p max_frame_length bytes.
+ * That length includes the frame header.
+ *
+ * @c wsm_frame_plan.frames_count is how many frames.
+ * @c wsm_frame_plan.data_length is their encoded length summed.
+ * @c WSM_ERR_MAX_FRAME_LENGTH means @p max_frame_length cannot hold a frame.
+ */
+struct wsm_frame_plan {
+  enum wsm_status status;
+  size_t frames_count;
+  uint64_t data_length;
+};
+
+struct wsm_frame_plan wsm_frame_plan(uint64_t payload_length, bool masked, size_t max_frame_length);
+
+#ifdef WSM_HOSTED
+
+struct wsm_decoder;
+
+/** @return Decoder, or nullptr on OOM. */
+struct wsm_decoder *wsm_decoder_create();
+
+/**
+ * @param decoder May be nullptr.
+ */
+void wsm_decoder_destroy(struct wsm_decoder *decoder);
+
+/**
+ * Parse @p source into messages. Incomplete frames stay in the decoder.
+ *
+ * A data message is emitted when its FIN frame arrives. Control is emitted as
+ * it arrives.
+ *
+ * The caller owns @c wsm_decoding_result.messages and each message's payload;
+ * free them with wsm_decoding_result_free. A later feed does not invalidate
+ * prior results.
+ *
+ * @c wsm_decoding_result.source_consumed is how many bytes of @p source were
+ * accepted; re-feed the remainder after @c WSM_ERR_NO_MEMORY. A later feed may
+ * return the recovered messages with @c wsm_decoding_result.source_consumed 0;
+ * re-feed that same remainder.
+ *
+ * @c WSM_ERR_NO_MEMORY does not kill the decoder. Length errors and sequencing
+ * errors leave the decoder unusable until a new one is created. Messages
+ * returned in the result are still owned by the caller.
+ */
+struct wsm_decoding_result wsm_decoder_feed(struct wsm_decoder *decoder, const uint8_t *source,
+                                            size_t source_length);
+
+/**
+ * Frees @c wsm_decoding_result.messages and each message's payload. No-op if
+ * there are no messages. After return those pointers must not be used. Safe to
+ * call once per feed result.
+ */
+void wsm_decoding_result_free(struct wsm_decoding_result result);
+
+/**
+ * Encode functions write one frame.
+ *
+ * @p masking_key of nullptr means unmasked. Non-null must address
+ * @c WSM_MASKING_KEY_LENGTH bytes; this library does not generate keys.
+ *
+ * @c wsm_text / @c wsm_binary are a one-frame message (FIN=1). @c wsm_start_*
+ * is TEXT or BINARY with FIN=0. Later @c wsm_continue_* is CONTINUATION with
+ * FIN=0. @c wsm_end_* is CONTINUATION with FIN=1.
+ *
+ * Control may be encoded while a data message is open. Control is never
+ * fragmented.
+ *
+ * On success the caller frees @c wsm_encoding_result.data. On
+ * @c WSM_ERR_NO_MEMORY, @c wsm_encoding_result.data is nullptr and
+ * @c wsm_encoding_result.data_length is 0.
+ */
+struct wsm_encoding_result wsm_text(struct wsm_encoder *encoder, const uint8_t *payload,
+                                    uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_binary(struct wsm_encoder *encoder, const uint8_t *payload,
+                                      uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_start_text(struct wsm_encoder *encoder, const uint8_t *payload,
+                                          uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_start_binary(struct wsm_encoder *encoder, const uint8_t *payload,
+                                            uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_continue_text(struct wsm_encoder *encoder, const uint8_t *payload,
+                                             uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_continue_binary(struct wsm_encoder *encoder, const uint8_t *payload,
+                                               uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_end_text(struct wsm_encoder *encoder, const uint8_t *payload,
+                                        uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_end_binary(struct wsm_encoder *encoder, const uint8_t *payload,
+                                          uint64_t payload_length, const uint8_t *masking_key);
+struct wsm_encoding_result wsm_ping(const uint8_t *payload, uint64_t payload_length,
+                                    const uint8_t *masking_key);
+struct wsm_encoding_result wsm_pong(const uint8_t *payload, uint64_t payload_length,
+                                    const uint8_t *masking_key);
+struct wsm_encoding_result wsm_close(const uint8_t *payload, uint64_t payload_length,
+                                     const uint8_t *masking_key);
+
+/**
+ * Encode one data message as frames of at most @p max_frame_length bytes,
+ * header included. The message is one frame when it fits.
+ *
+ * @p masking_keys nullptr means unmasked. Non-null addresses
+ * @c wsm_frame_plan.frames_count keys of @c WSM_MASKING_KEY_LENGTH bytes, in
+ * frame order. This library does not generate keys. @p masked in
+ * wsm_frame_plan must agree with @p masking_keys.
+ *
+ * The caller frees a successful result with wsm_frames_result_free.
+ * @c wsm_text / @c wsm_binary encode one frame and take no size limit.
+ */
+struct wsm_frames_result {
+  enum wsm_status status;
+  const uint8_t *const *frames;
+  const size_t *frame_lengths;
+  size_t frames_count;
+};
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                         uint64_t payload_length, const uint8_t *masking_keys,
+                                         size_t max_frame_length);
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                           uint64_t payload_length, const uint8_t *masking_keys,
+                                           size_t max_frame_length);
+void wsm_frames_result_free(struct wsm_frames_result result);
+
+#elifndef WSM_HOSTED
+
+static constexpr size_t wsm_decoder_opaque_size = 256;
+
+/**
+ * Contents are private.
+ */
+struct wsm_decoder {
+  alignas(max_align_t) unsigned char opaque[wsm_decoder_opaque_size];
+};
+
+/**
+ * Prepare @p decoder to parse. Payload bytes are written into @p payload.
+ * @p payload_capacity is the largest payload accepted.
+ */
+void wsm_decoder_init(struct wsm_decoder *decoder, uint8_t *payload, size_t payload_capacity);
+
+/**
+ * Replace the buffer that receives payload bytes. @p payload_capacity is the
+ * largest payload accepted. Use this after @c WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY,
+ * or before the next frame.
+ */
+void wsm_decoder_set_payload_buffer(struct wsm_decoder *decoder, uint8_t *payload,
+                                    size_t payload_capacity);
+
+/**
+ * Parse @p source into at most one message. Incomplete frames stay in the
+ * decoder.
+ *
+ * Payload bytes are written into the buffer installed on @p decoder. A data
+ * message occupies the start of that buffer until its FIN frame; control uses
+ * the free suffix and is overwritten by the next feed.
+ * @c WSM_OK means @c wsm_decoding_result.message is complete. Its payload
+ * addresses that buffer. @c WSM_INCOMPLETE means no message yet: the frame is
+ * unfinished, or a data message is still open.
+ * @c wsm_decoding_result.source_consumed is how many bytes of @p source were
+ * accepted. Re-feed the unconsumed suffix.
+ * On @c WSM_ERR_PAYLOAD_EXCEEDS_CAPACITY the payload was not accepted. Pass a
+ * larger buffer to wsm_decoder_set_payload_buffer and re-feed the suffix. The
+ * bytes of an open data message are copied into that buffer.
+ * Length errors and sequencing errors leave the decoder unusable until
+ * wsm_decoder_init.
+ */
+struct wsm_decoding_result wsm_decoder_feed(struct wsm_decoder *decoder, const uint8_t *source,
+                                            size_t source_length);
+
+uint64_t wsm_encoded_length(uint64_t payload_length, bool masked);
+
+/**
+ * Write one frame into @p destination.
+ *
+ * @p destination must have room for wsm_encoded_length(@p payload_length,
+ * @p masking_key != nullptr). @p masking_key of nullptr means unmasked.
+ * Non-null must address @c WSM_MASKING_KEY_LENGTH bytes; this library does not
+ * generate keys.
+ *
+ * @c wsm_text / @c wsm_binary are a one-frame message (FIN=1). @c wsm_start_*
+ * is TEXT or BINARY with FIN=0. Later @c wsm_continue_* is CONTINUATION with
+ * FIN=0. @c wsm_end_* is CONTINUATION with FIN=1.
+ *
+ * Control may be encoded while a data message is open. Control is never
+ * fragmented.
+ *
+ * @return Bytes written (same as wsm_encoded_length).
+ */
+size_t wsm_text(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_binary(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                  uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_start_text(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                      uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_start_binary(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                        uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_continue_text(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                         uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_continue_binary(struct wsm_encoder *encoder, uint8_t *destination,
+                           const uint8_t *payload, uint64_t payload_length,
+                           const uint8_t *masking_key);
+size_t wsm_end_text(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                    uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_end_binary(struct wsm_encoder *encoder, uint8_t *destination, const uint8_t *payload,
+                      uint64_t payload_length, const uint8_t *masking_key);
+size_t wsm_ping(uint8_t *destination, const uint8_t *payload, uint64_t payload_length,
+                const uint8_t *masking_key);
+size_t wsm_pong(uint8_t *destination, const uint8_t *payload, uint64_t payload_length,
+                const uint8_t *masking_key);
+size_t wsm_close(uint8_t *destination, const uint8_t *payload, uint64_t payload_length,
+                 const uint8_t *masking_key);
+
+/**
+ * Encode one data message as frames of at most @p max_frame_length bytes,
+ * header included. The message is one frame when it fits.
+ *
+ * @p destination must have room for @c wsm_frame_plan.data_length.
+ * @p masking_keys nullptr means unmasked. Non-null addresses
+ * @c wsm_frame_plan.frames_count keys of @c WSM_MASKING_KEY_LENGTH bytes, in
+ * frame order. This library does not generate keys. @p masked in
+ * wsm_frame_plan must agree with @p masking_keys.
+ *
+ * @c wsm_frames_result.data_length is the number of bytes written.
+ * @c wsm_text / @c wsm_binary encode one frame and take no size limit.
+ */
+struct wsm_frames_result {
+  enum wsm_status status;
+  size_t frames_count;
+  size_t data_length;
+};
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                         const uint8_t *payload, uint64_t payload_length,
+                                         const uint8_t *masking_keys, size_t max_frame_length);
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                           const uint8_t *payload, uint64_t payload_length,
+                                           const uint8_t *masking_keys, size_t max_frame_length);
+
+#endif
+
+#endif /* WSM_H */
