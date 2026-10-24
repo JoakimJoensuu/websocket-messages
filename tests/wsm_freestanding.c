@@ -359,6 +359,91 @@ Ensure(encoded_length_matches_write) {
   assert_that(wire_length, is_equal_to(wsm_encoded_length(sizeof(hello), true)));
 }
 
+Ensure(frame_plan_bounds) {
+  enum {
+    empty_frame      = 2,
+    length7_frame    = 127,
+    length16_payload = 126,
+    length16_frame   = 130,
+  };
+  struct wsm_frame_plan too_small = wsm_frame_plan(0, false, 1);
+  struct wsm_frame_plan empty = wsm_frame_plan(0, false, empty_frame);
+  struct wsm_frame_plan spills = wsm_frame_plan(length16_payload, false, length7_frame);
+  struct wsm_frame_plan sixteen_bit = wsm_frame_plan(length16_payload, false, length16_frame);
+  assert_that(too_small.status, is_equal_to(WSM_ERR_MAX_FRAME_LENGTH));
+  assert_that(empty.frames_count, is_equal_to(1));
+  assert_that(empty.data_length, is_equal_to(empty_frame));
+  assert_that(spills.frames_count, is_equal_to(2));
+  assert_that(sixteen_bit.frames_count, is_equal_to(1));
+  assert_that(sixteen_bit.data_length, is_equal_to(length16_frame));
+}
+
+Ensure(text_frames_round_trip) {
+  enum { payload_length = 10, max_frame_length = 4 };
+  uint8_t payload[payload_length];
+  uint8_t wire[WIRE_CAPACITY];
+  struct wsm_encoder encoder = wsm_encoder_create();
+  struct wsm_frame_plan plan = wsm_frame_plan(payload_length, false, max_frame_length);
+  struct wsm_frames_result frames;
+  struct opened opened;
+  struct wsm_decoding_result decoded = {};
+  for (size_t i = 0; i < payload_length; i++) {
+    payload[i] = (uint8_t)i;
+  }
+  assert_that(plan.data_length <= sizeof(wire), is_true);
+  frames = wsm_text_frames(&encoder, wire, payload, payload_length, nullptr, max_frame_length);
+  assert_that(frames.status, is_equal_to(WSM_OK));
+  assert_that(frames.frames_count, is_equal_to(plan.frames_count));
+  assert_that(frames.data_length, is_equal_to(plan.data_length));
+  wsm_test_assert_frame_header(wire, false, WSM_TEXT);
+  open_decoder(&opened);
+  size_t consumed = 0;
+  bool saw_message = false;
+  while (consumed < frames.data_length) {
+    decoded = feed(&opened, wire + consumed, frames.data_length - consumed);
+    consumed += decoded.source_consumed;
+    if (decoded.status == WSM_OK) {
+      wsm_test_assert_message(&decoded.message, WSM_TEXT, payload, payload_length);
+      saw_message = true;
+      break;
+    }
+    assert_that(decoded.status, is_equal_to(WSM_INCOMPLETE));
+  }
+  assert_that(saw_message, is_true);
+}
+
+Ensure(binary_frames_masked) {
+  enum { max_frame_length = 8 };
+  const uint8_t payload[] = {1, 2, 3, 4};
+  const uint8_t keys[] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80};
+  uint8_t wire[WIRE_CAPACITY];
+  struct wsm_encoder encoder = wsm_encoder_create();
+  struct wsm_frame_plan plan = wsm_frame_plan(sizeof(payload), true, max_frame_length);
+  struct wsm_frames_result frames;
+  struct opened opened;
+  struct wsm_decoding_result decoded = {};
+  assert_that(plan.frames_count, is_equal_to(2));
+  assert_that(plan.data_length <= sizeof(wire), is_true);
+  frames = wsm_binary_frames(&encoder, wire, payload, sizeof(payload), keys, max_frame_length);
+  assert_that(frames.status, is_equal_to(WSM_OK));
+  assert_that(frames.frames_count, is_equal_to(2));
+  wsm_test_assert_frame_header(wire, false, WSM_BINARY);
+  open_decoder(&opened);
+  size_t consumed = 0;
+  bool saw_message = false;
+  while (consumed < frames.data_length) {
+    decoded = feed(&opened, wire + consumed, frames.data_length - consumed);
+    consumed += decoded.source_consumed;
+    if (decoded.status == WSM_OK) {
+      wsm_test_assert_message(&decoded.message, WSM_BINARY, payload, sizeof(payload));
+      saw_message = true;
+      break;
+    }
+    assert_that(decoded.status, is_equal_to(WSM_INCOMPLETE));
+  }
+  assert_that(saw_message, is_true);
+}
+
 int main() {
   auto suite = create_test_suite();
   add_test(suite, one_frame_message);
@@ -377,6 +462,9 @@ int main() {
   add_test(suite, pong_and_close);
   add_test(suite, payload_exceeds_capacity_while_fragmented);
   add_test(suite, encoded_length_matches_write);
+  add_test(suite, frame_plan_bounds);
+  add_test(suite, text_frames_round_trip);
+  add_test(suite, binary_frames_masked);
   auto reporter = create_text_reporter();
   int result = run_test_suite(suite, reporter);
   destroy_test_suite(suite);

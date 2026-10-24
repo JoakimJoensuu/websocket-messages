@@ -132,6 +132,142 @@ static bool fin_for_fragment(enum fragment fragment) {
   return fragment == FRAGMENT_COMPLETE || fragment == FRAGMENT_END;
 }
 
+enum length_field : unsigned {
+  HEADER_BASE_LENGTH    = 2,
+  LENGTH7_MAX           = 125,
+  LENGTH16_FIELD_LENGTH = 2,
+  LENGTH64_FIELD_LENGTH = 8,
+};
+
+struct payload_budget {
+  bool fits;
+  uint64_t payload_length;
+};
+
+static size_t mask_length(bool masked) {
+  return masked ? WSM_MASKING_KEY_LENGTH : 0;
+}
+
+static uint64_t encoded_frame_length(uint64_t payload_length, bool masked) {
+  uint64_t header = HEADER_BASE_LENGTH + mask_length(masked);
+  if (LENGTH7_MAX < payload_length) {
+    header += UINT16_MAX < payload_length ? LENGTH64_FIELD_LENGTH : LENGTH16_FIELD_LENGTH;
+  }
+  return header + payload_length;
+}
+
+static struct payload_budget payload_budget(size_t max_frame_length, bool masked) {
+  size_t header7 = HEADER_BASE_LENGTH + mask_length(masked);
+  size_t header16 = header7 + LENGTH16_FIELD_LENGTH;
+  size_t header64 = header7 + LENGTH64_FIELD_LENGTH;
+  if (header64 <= max_frame_length) {
+    uint64_t room = (uint64_t)max_frame_length - header64;
+    if (UINT16_MAX < room) {
+      return (struct payload_budget){.fits = true, .payload_length = room};
+    }
+  }
+  if (header16 <= max_frame_length) {
+    uint64_t room = (uint64_t)max_frame_length - header16;
+    if (LENGTH7_MAX < room) {
+      return (struct payload_budget){
+          .fits = true,
+          .payload_length = room <= UINT16_MAX ? room : UINT16_MAX,
+      };
+    }
+  }
+  if (header7 <= max_frame_length) {
+    uint64_t room = (uint64_t)max_frame_length - header7;
+    return (struct payload_budget){
+        .fits = true,
+        .payload_length = room <= LENGTH7_MAX ? room : LENGTH7_MAX,
+    };
+  }
+  return (struct payload_budget){.fits = false};
+}
+
+static enum fragment fragment_at(size_t index, size_t count) {
+  if (count == 1) {
+    return FRAGMENT_COMPLETE;
+  }
+  if (index == 0) {
+    return FRAGMENT_START;
+  }
+  if (index + 1 == count) {
+    return FRAGMENT_END;
+  }
+  return FRAGMENT_CONTINUE;
+}
+
+struct wsm_frame_plan wsm_frame_plan(uint64_t payload_length, bool masked,
+                                     size_t max_frame_length) {
+  struct payload_budget budget = payload_budget(max_frame_length, masked);
+  if (!budget.fits || (0 < payload_length && budget.payload_length == 0)) {
+    return (struct wsm_frame_plan){.status = WSM_ERR_MAX_FRAME_LENGTH};
+  }
+  if (payload_length == 0) {
+    return (struct wsm_frame_plan){
+        .status = WSM_OK,
+        .frames_count = 1,
+        .data_length = encoded_frame_length(0, masked),
+    };
+  }
+  uint64_t full = payload_length / budget.payload_length;
+  uint64_t last = payload_length % budget.payload_length;
+  uint64_t count = last == 0 ? full : full + 1;
+  if (SIZE_MAX < count) {
+    return (struct wsm_frame_plan){.status = WSM_ERR_LENGTH_EXCEEDS_SIZE};
+  }
+  uint64_t full_length = encoded_frame_length(budget.payload_length, masked);
+  if (0 < full && UINT64_MAX / full_length < full) {
+    return (struct wsm_frame_plan){.status = WSM_ERR_LENGTH_EXCEEDS_SIZE};
+  }
+  uint64_t data_length = full * full_length;
+  if (0 < last) {
+    uint64_t tail = encoded_frame_length(last, masked);
+    if (UINT64_MAX - data_length < tail) {
+      return (struct wsm_frame_plan){.status = WSM_ERR_LENGTH_EXCEEDS_SIZE};
+    }
+    data_length += tail;
+  }
+  return (struct wsm_frame_plan){
+      .status = WSM_OK,
+      .frames_count = (size_t)count,
+      .data_length = data_length,
+  };
+}
+
+static void require_closed_encoder(const struct wsm_encoder *encoder) {
+  if (encoder == nullptr) {
+    trap();
+  }
+  struct encoder state = transparent_encoder(encoder);
+  if (state.open != OPEN_NONE) {
+    trap();
+  }
+}
+
+static const uint8_t *frame_key(const uint8_t *masking_keys, size_t index) {
+  if (masking_keys == nullptr) {
+    return nullptr;
+  }
+  return masking_keys + (index * WSM_MASKING_KEY_LENGTH);
+}
+
+struct payload_span {
+  uint64_t offset;
+  uint64_t length;
+};
+
+static const uint8_t *frame_payload(const uint8_t *payload, struct payload_span span) {
+  if (span.length == 0) {
+    return nullptr;
+  }
+  if (SIZE_MAX < span.offset) {
+    trap();
+  }
+  return payload + (size_t)span.offset;
+}
+
 static void prepare_data(const struct encoder *state, struct data_plan plan) {
   if (plan.fragment == FRAGMENT_COMPLETE || plan.fragment == FRAGMENT_START) {
     if (state->open != OPEN_NONE) {
@@ -526,6 +662,92 @@ struct wsm_encoding_result wsm_close(const uint8_t *payload, uint64_t payload_le
   return encode_control(WSM_CLOSE, payload, payload_length, masking_key);
 }
 
+static struct wsm_frames_result frames_error(enum wsm_status status) {
+  return (struct wsm_frames_result){.status = status};
+}
+
+static struct wsm_frames_result encode_frames(struct wsm_encoder *encoder,
+                                              enum wsm_message_type type, const uint8_t *payload,
+                                              uint64_t payload_length, const uint8_t *masking_keys,
+                                              size_t max_frame_length) {
+  require_closed_encoder(encoder);
+  if (0 < payload_length && payload == nullptr) {
+    trap();
+  }
+  struct wsm_frame_plan plan =
+      wsm_frame_plan(payload_length, masking_keys != nullptr, max_frame_length);
+  if (plan.status != WSM_OK) {
+    return frames_error(plan.status);
+  }
+  if (SIZE_MAX < plan.data_length) {
+    return frames_error(WSM_ERR_LENGTH_EXCEEDS_SIZE);
+  }
+  if (plan.frames_count == 0) {
+    return frames_error(WSM_ERR_MAX_FRAME_LENGTH);
+  }
+  struct payload_budget budget = payload_budget(max_frame_length, masking_keys != nullptr);
+  uint8_t **frames = (uint8_t **)malloc(plan.frames_count * sizeof(*frames));
+  size_t *lengths = malloc(plan.frames_count * sizeof(*lengths));
+  if (frames == nullptr || lengths == nullptr) {
+    free((void *)frames);
+    free(lengths);
+    return frames_error(WSM_ERR_NO_MEMORY);
+  }
+  uint64_t offset = 0;
+  for (size_t i = 0; i < plan.frames_count; i++) {
+    uint64_t remaining = payload_length - offset;
+    uint64_t piece = remaining < budget.payload_length ? remaining : budget.payload_length;
+    struct data_plan data = {.type = type, .fragment = fragment_at(i, plan.frames_count)};
+    struct payload_span span = {.offset = offset, .length = piece};
+    struct wsc_frame frame =
+        make_frame(frame_opcode(data), fin_for_fragment(data.fragment),
+                   frame_payload(payload, span), piece, frame_key(masking_keys, i));
+    struct wsc_encoding_result encoded = wsc_encode(&frame);
+    if (encoded.status != WSC_OK) {
+      for (size_t j = 0; j < i; j++) {
+        free(frames[j]);
+      }
+      free((void *)frames);
+      free(lengths);
+      return frames_error(map_status(encoded.status));
+    }
+    frames[i] = encoded.data;
+    lengths[i] = encoded.data_length;
+    offset += piece;
+  }
+  return (struct wsm_frames_result){
+      .status = WSM_OK,
+      .frames = (const uint8_t *const *)frames,
+      .frame_lengths = lengths,
+      .frames_count = plan.frames_count,
+  };
+}
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                         uint64_t payload_length, const uint8_t *masking_keys,
+                                         size_t max_frame_length) {
+  return encode_frames(encoder, WSM_TEXT, payload, payload_length, masking_keys, max_frame_length);
+}
+
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                           uint64_t payload_length, const uint8_t *masking_keys,
+                                           size_t max_frame_length) {
+  return encode_frames(encoder, WSM_BINARY, payload, payload_length, masking_keys,
+                       max_frame_length);
+}
+
+void wsm_frames_result_free(struct wsm_frames_result result) {
+  if (result.frames == nullptr) {
+    free((void *)result.frame_lengths);
+    return;
+  }
+  for (size_t i = 0; i < result.frames_count; i++) {
+    free((void *)result.frames[i]);
+  }
+  free((void *)result.frames);
+  free((void *)result.frame_lengths);
+}
+
 #else
 
 struct decoder {
@@ -811,6 +1033,63 @@ size_t wsm_pong(uint8_t *destination, const uint8_t *payload, uint64_t payload_l
 size_t wsm_close(uint8_t *destination, const uint8_t *payload, uint64_t payload_length,
                  const uint8_t *masking_key) {
   return encode_control(destination, WSM_CLOSE, payload, payload_length, masking_key);
+}
+
+static struct wsm_frames_result encode_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                              enum wsm_message_type type, const uint8_t *payload,
+                                              uint64_t payload_length, const uint8_t *masking_keys,
+                                              size_t max_frame_length) {
+  require_closed_encoder(encoder);
+  if (0 < payload_length && payload == nullptr) {
+    trap();
+  }
+  struct wsm_frame_plan plan =
+      wsm_frame_plan(payload_length, masking_keys != nullptr, max_frame_length);
+  if (plan.status != WSM_OK) {
+    return (struct wsm_frames_result){.status = plan.status};
+  }
+  if (SIZE_MAX < plan.data_length) {
+    return (struct wsm_frames_result){.status = WSM_ERR_LENGTH_EXCEEDS_SIZE};
+  }
+  if (plan.frames_count == 0) {
+    return (struct wsm_frames_result){.status = WSM_ERR_MAX_FRAME_LENGTH};
+  }
+  if (destination == nullptr) {
+    trap();
+  }
+  struct payload_budget budget = payload_budget(max_frame_length, masking_keys != nullptr);
+  size_t written = 0;
+  uint64_t offset = 0;
+  for (size_t i = 0; i < plan.frames_count; i++) {
+    uint64_t remaining = payload_length - offset;
+    uint64_t piece = remaining < budget.payload_length ? remaining : budget.payload_length;
+    struct data_plan data = {.type = type, .fragment = fragment_at(i, plan.frames_count)};
+    struct payload_span span = {.offset = offset, .length = piece};
+    struct wsc_frame frame =
+        make_frame(frame_opcode(data), fin_for_fragment(data.fragment),
+                   frame_payload(payload, span), piece, frame_key(masking_keys, i));
+    written += wsc_encode(destination + written, &frame);
+    offset += piece;
+  }
+  return (struct wsm_frames_result){
+      .status = WSM_OK,
+      .frames_count = plan.frames_count,
+      .data_length = written,
+  };
+}
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                         const uint8_t *payload, uint64_t payload_length,
+                                         const uint8_t *masking_keys, size_t max_frame_length) {
+  return encode_frames(encoder, destination, WSM_TEXT, payload, payload_length, masking_keys,
+                       max_frame_length);
+}
+
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                           const uint8_t *payload, uint64_t payload_length,
+                                           const uint8_t *masking_keys, size_t max_frame_length) {
+  return encode_frames(encoder, destination, WSM_BINARY, payload, payload_length, masking_keys,
+                       max_frame_length);
 }
 
 #endif

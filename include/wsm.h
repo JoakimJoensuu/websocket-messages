@@ -18,6 +18,7 @@ enum wsm_status : int8_t {
   WSM_ERR_PROTOCOL_ORPHAN_CONTINUATION   = -6,
   WSM_ERR_PROTOCOL_DATA_WHILE_FRAGMENTED = -7,
   WSM_ERR_PROTOCOL_FRAGMENTED_CONTROL    = -8,
+  WSM_ERR_MAX_FRAME_LENGTH               = -9,
 };
 
 enum wsm_message_type : uint8_t {
@@ -80,6 +81,22 @@ struct wsm_encoder {
 };
 
 struct wsm_encoder wsm_encoder_create();
+
+/**
+ * Split of @p payload_length into frames of at most @p max_frame_length bytes.
+ * That length includes the frame header.
+ *
+ * @c wsm_frame_plan.frames_count is how many frames.
+ * @c wsm_frame_plan.data_length is their encoded length summed.
+ * @c WSM_ERR_MAX_FRAME_LENGTH means @p max_frame_length cannot hold a frame.
+ */
+struct wsm_frame_plan {
+  enum wsm_status status;
+  size_t frames_count;
+  uint64_t data_length;
+};
+
+struct wsm_frame_plan wsm_frame_plan(uint64_t payload_length, bool masked, size_t max_frame_length);
 
 #ifdef WSM_HOSTED
 
@@ -161,6 +178,33 @@ struct wsm_encoding_result wsm_pong(const uint8_t *payload, uint64_t payload_len
                                     const uint8_t *masking_key);
 struct wsm_encoding_result wsm_close(const uint8_t *payload, uint64_t payload_length,
                                      const uint8_t *masking_key);
+
+/**
+ * Encode one data message as frames of at most @p max_frame_length bytes,
+ * header included. The message is one frame when it fits.
+ *
+ * @p masking_keys nullptr means unmasked. Non-null addresses
+ * @c wsm_frame_plan.frames_count keys of @c WSM_MASKING_KEY_LENGTH bytes, in
+ * frame order. This library does not generate keys. @p masked in
+ * wsm_frame_plan must agree with @p masking_keys.
+ *
+ * The caller frees a successful result with wsm_frames_result_free.
+ * @c wsm_text / @c wsm_binary encode one frame and take no size limit.
+ */
+struct wsm_frames_result {
+  enum wsm_status status;
+  const uint8_t *const *frames;
+  const size_t *frame_lengths;
+  size_t frames_count;
+};
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                         uint64_t payload_length, const uint8_t *masking_keys,
+                                         size_t max_frame_length);
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, const uint8_t *payload,
+                                           uint64_t payload_length, const uint8_t *masking_keys,
+                                           size_t max_frame_length);
+void wsm_frames_result_free(struct wsm_frames_result result);
 
 #elifndef WSM_HOSTED
 
@@ -250,6 +294,32 @@ size_t wsm_pong(uint8_t *destination, const uint8_t *payload, uint64_t payload_l
                 const uint8_t *masking_key);
 size_t wsm_close(uint8_t *destination, const uint8_t *payload, uint64_t payload_length,
                  const uint8_t *masking_key);
+
+/**
+ * Encode one data message as frames of at most @p max_frame_length bytes,
+ * header included. The message is one frame when it fits.
+ *
+ * @p destination must have room for @c wsm_frame_plan.data_length.
+ * @p masking_keys nullptr means unmasked. Non-null addresses
+ * @c wsm_frame_plan.frames_count keys of @c WSM_MASKING_KEY_LENGTH bytes, in
+ * frame order. This library does not generate keys. @p masked in
+ * wsm_frame_plan must agree with @p masking_keys.
+ *
+ * @c wsm_frames_result.data_length is the number of bytes written.
+ * @c wsm_text / @c wsm_binary encode one frame and take no size limit.
+ */
+struct wsm_frames_result {
+  enum wsm_status status;
+  size_t frames_count;
+  size_t data_length;
+};
+
+struct wsm_frames_result wsm_text_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                         const uint8_t *payload, uint64_t payload_length,
+                                         const uint8_t *masking_keys, size_t max_frame_length);
+struct wsm_frames_result wsm_binary_frames(struct wsm_encoder *encoder, uint8_t *destination,
+                                           const uint8_t *payload, uint64_t payload_length,
+                                           const uint8_t *masking_keys, size_t max_frame_length);
 
 #endif
 

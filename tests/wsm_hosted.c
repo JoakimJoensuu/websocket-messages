@@ -376,6 +376,124 @@ Ensure(pong_and_close) {
   free(close_wire);
 }
 
+Ensure(frame_plan_bounds) {
+  enum {
+    empty_frame      = 2,
+    length7_payload  = 125,
+    length7_frame    = 127,
+    length16_payload = 126,
+    length16_frame   = 130,
+  };
+  struct wsm_frame_plan too_small = wsm_frame_plan(0, false, 1);
+  struct wsm_frame_plan empty = wsm_frame_plan(0, false, empty_frame);
+  struct wsm_frame_plan no_progress = wsm_frame_plan(1, false, empty_frame);
+  struct wsm_frame_plan seven_bit = wsm_frame_plan(length7_payload, false, length7_frame);
+  struct wsm_frame_plan spills = wsm_frame_plan(length16_payload, false, length7_frame);
+  struct wsm_frame_plan sixteen_bit = wsm_frame_plan(length16_payload, false, length16_frame);
+  assert_that(too_small.status, is_equal_to(WSM_ERR_MAX_FRAME_LENGTH));
+  assert_that(empty.status, is_equal_to(WSM_OK));
+  assert_that(empty.frames_count, is_equal_to(1));
+  assert_that(empty.data_length, is_equal_to(empty_frame));
+  assert_that(no_progress.status, is_equal_to(WSM_ERR_MAX_FRAME_LENGTH));
+  assert_that(seven_bit.frames_count, is_equal_to(1));
+  assert_that(seven_bit.data_length, is_equal_to(length7_frame));
+  assert_that(spills.frames_count, is_equal_to(2));
+  assert_that(sixteen_bit.frames_count, is_equal_to(1));
+  assert_that(sixteen_bit.data_length, is_equal_to(length16_frame));
+}
+
+Ensure(text_frames_round_trip) {
+  enum { payload_length = 10, max_frame_length = 4, frame_count = 5 };
+  uint8_t payload[payload_length];
+  struct wsm_encoder encoder = wsm_encoder_create();
+  struct wsm_frame_plan plan;
+  struct wsm_frames_result frames;
+  size_t wire_length = 0;
+  uint8_t *wire = nullptr;
+  size_t filled = 0;
+  struct wsm_decoder *decoder = nullptr;
+  struct wsm_decoding_result decoded;
+  for (size_t i = 0; i < payload_length; i++) {
+    payload[i] = (uint8_t)i;
+  }
+  plan = wsm_frame_plan(payload_length, false, max_frame_length);
+  assert_that(plan.status, is_equal_to(WSM_OK));
+  assert_that(plan.frames_count, is_equal_to(frame_count));
+  frames = wsm_text_frames(&encoder, payload, payload_length, nullptr, max_frame_length);
+  assert_that(frames.status, is_equal_to(WSM_OK));
+  assert_that(frames.frames_count, is_equal_to(frame_count));
+  wsm_test_assert_frame_header(frames.frames[0], false, WSM_TEXT);
+  wsm_test_assert_frame_header(frames.frames[frame_count - 1], true, WSM_TEST_CONTINUATION);
+  for (size_t i = 0; i < frames.frames_count; i++) {
+    wire_length += frames.frame_lengths[i];
+  }
+  assert_that(0 < wire_length, is_true);
+  if (0 < wire_length) {
+    wire = malloc(wire_length);
+  }
+  assert_that(wire, is_non_null);
+  if (wire != nullptr) {
+    for (size_t i = 0; i < frames.frames_count; i++) {
+      memcpy(wire + filled, frames.frames[i], frames.frame_lengths[i]);
+      filled += frames.frame_lengths[i];
+    }
+  }
+  decoder = wsm_decoder_create();
+  assert_that(decoder, is_non_null);
+  decoded = wsm_decoder_feed(decoder, wire, wire_length);
+  assert_that(decoded.status, is_equal_to(WSM_OK));
+  assert_that(decoded.messages_count, is_equal_to(1));
+  wsm_test_assert_message(&decoded.messages[0], WSM_TEXT, payload, payload_length);
+  wsm_decoding_result_free(decoded);
+  wsm_decoder_destroy(decoder);
+  wsm_frames_result_free(frames);
+  free(wire);
+}
+
+Ensure(binary_frames_masked) {
+  enum { max_frame_length = 8 };
+  const uint8_t payload[] = {1, 2, 3, 4};
+  const uint8_t keys[] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80};
+  struct wsm_encoder encoder = wsm_encoder_create();
+  struct wsm_frame_plan plan = wsm_frame_plan(sizeof(payload), true, max_frame_length);
+  struct wsm_frames_result frames;
+  size_t wire_length = 0;
+  uint8_t *wire = nullptr;
+  size_t filled = 0;
+  struct wsm_decoder *decoder = nullptr;
+  struct wsm_decoding_result decoded;
+  assert_that(plan.status, is_equal_to(WSM_OK));
+  assert_that(plan.frames_count, is_equal_to(2));
+  frames = wsm_binary_frames(&encoder, payload, sizeof(payload), keys, max_frame_length);
+  assert_that(frames.status, is_equal_to(WSM_OK));
+  assert_that(frames.frames_count, is_equal_to(2));
+  wsm_test_assert_frame_header(frames.frames[0], false, WSM_BINARY);
+  for (size_t i = 0; i < frames.frames_count; i++) {
+    wire_length += frames.frame_lengths[i];
+  }
+  assert_that(0 < wire_length, is_true);
+  if (0 < wire_length) {
+    wire = malloc(wire_length);
+  }
+  assert_that(wire, is_non_null);
+  if (wire != nullptr) {
+    for (size_t i = 0; i < frames.frames_count; i++) {
+      memcpy(wire + filled, frames.frames[i], frames.frame_lengths[i]);
+      filled += frames.frame_lengths[i];
+    }
+  }
+  decoder = wsm_decoder_create();
+  assert_that(decoder, is_non_null);
+  decoded = wsm_decoder_feed(decoder, wire, wire_length);
+  assert_that(decoded.status, is_equal_to(WSM_OK));
+  assert_that(decoded.messages_count, is_equal_to(1));
+  wsm_test_assert_message(&decoded.messages[0], WSM_BINARY, payload, sizeof(payload));
+  wsm_decoding_result_free(decoded);
+  wsm_decoder_destroy(decoder);
+  wsm_frames_result_free(frames);
+  free(wire);
+}
+
 int main() {
   auto suite = create_test_suite();
   add_test(suite, one_frame_message);
@@ -392,6 +510,9 @@ int main() {
   add_test(suite, rfc_unmasked_hello);
   add_test(suite, fragmented_control);
   add_test(suite, pong_and_close);
+  add_test(suite, frame_plan_bounds);
+  add_test(suite, text_frames_round_trip);
+  add_test(suite, binary_frames_masked);
   auto reporter = create_text_reporter();
   int result = run_test_suite(suite, reporter);
   destroy_test_suite(suite);
